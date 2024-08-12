@@ -1,0 +1,9 @@
+Flask==2.3.2
+hdwallet
+python-dotenv==1.0.0
+mysql-connector-python==8.2.0
+logging
+cryptography
+pyjwt 
+flask-limiter
+
