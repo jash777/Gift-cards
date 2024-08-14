@@ -5,14 +5,14 @@ from hdwallet.cryptocurrencies import EthereumMainnet
 from hdwallet.utils import generate_mnemonic
 import secrets
 from mysql.connector import Error
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import wraps
-import jwt
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import logging
 from dotenv import load_dotenv
 import os
+import uuid
 
 bp = Blueprint('routes', __name__)
 
@@ -25,19 +25,21 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# Secret key for JWT
-JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or 'default-secret-key'
+# Secret key for authentication
+API_SECRET_KEY = os.environ.get('API_SECRET_KEY') or 'your-secret-key-here'
 
-def token_required(f):
+# Constants
+MIN_POOL_SIZE = 100
+REPLENISH_SIZE = 500
+
+def authenticate(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        token = request.headers.get('Authorization')
-        if not token:
-            return jsonify({'message': 'Token is missing'}), 401
-        try:
-            data = jwt.decode(token, JWT_SECRET_KEY, algorithms=["HS256"])
-        except:
-            return jsonify({'message': 'Token is invalid'}), 401
+        provided_key = request.headers.get('X-API-Key')
+        if not provided_key:
+            return jsonify({'message': 'API key is missing'}), 401
+        if not secrets.compare_digest(provided_key, API_SECRET_KEY):
+            return jsonify({'message': 'Invalid API key'}), 401
         return f(*args, **kwargs)
     return decorated
 
@@ -47,37 +49,98 @@ def get_hdwallet(mnemonic: str, derivation_path: str) -> BIP44HDWallet:
     hdwallet.from_path(path=derivation_path)
     return hdwallet
 
-def generate_unique_derivation_path(cursor):
-    max_attempts = 10
-    for attempt in range(max_attempts):
-        cursor.execute("SELECT MAX(CAST(SUBSTRING_INDEX(derivation_path, '/', -1) AS UNSIGNED)) as max_index FROM wallet_addresses")
-        result = cursor.fetchone()
-        index = (result['max_index'] or -1) + 1 + attempt
-        derivation_path = f"m/44'/60'/0'/0/{index}"
-        
-        cursor.execute("SELECT COUNT(*) as count FROM wallet_addresses WHERE derivation_path = %s", (derivation_path,))
-        if cursor.fetchone()['count'] == 0:
-            return derivation_path
-    
-    logger.error(f"Failed to generate a unique derivation path after {max_attempts} attempts")
-    raise ValueError("Failed to generate a unique derivation path")
+def generate_wallet_addresses(mnemonic, count):
+    addresses = []
+    for _ in range(count):
+        derivation_path = f"m/44'/60'/0'/0/{secrets.randbelow(2**32)}"
+        hdwallet = get_hdwallet(mnemonic, derivation_path)
+        address = hdwallet.address()
+        wallet_address_id = str(uuid.uuid4())
+        addresses.append((wallet_address_id, address, derivation_path))
+    return addresses
 
-def insert_wallet_address(cursor, address, name, derivation_path):
+def insert_wallet_addresses(cursor, addresses):
     try:
-        cursor.execute('''
-            INSERT INTO wallet_addresses (address, name, derivation_path)
-            VALUES (%s, %s, %s)
-        ''', (address, name, derivation_path))
+        cursor.executemany('''
+            INSERT INTO wallet_addresses 
+            (wallet_address_id, address, derivation_path, is_assigned, created_at)
+            VALUES (%s, %s, %s, FALSE, NOW())
+        ''', addresses)
         return True
     except Error as e:
-        logger.error(f"Failed to insert new wallet address: {str(e)}")
+        logger.error(f"Failed to insert wallet addresses: {str(e)}")
         return False
 
+def get_user_wallet_addresses(cursor, user_id):
+    try:
+        cursor.execute('''
+            SELECT wallet_address_id, address, assigned_at
+            FROM wallet_addresses
+            WHERE user_id = %s AND is_assigned = TRUE
+            ORDER BY assigned_at DESC
+        ''', (user_id,))
+        return cursor.fetchall()
+    except Error as e:
+        logger.error(f"Database error in get_user_wallet_addresses: {str(e)}")
+        return None
+
+def assign_new_wallet_address(cursor, user_id):
+    try:
+        cursor.execute('''
+            SELECT id, wallet_address_id, address
+            FROM wallet_addresses
+            WHERE is_assigned = FALSE
+            LIMIT 1
+            FOR UPDATE
+        ''')
+        new_address = cursor.fetchone()
+        
+        if not new_address:
+            return None
+        
+        cursor.execute('''
+            UPDATE wallet_addresses
+            SET is_assigned = TRUE, assigned_at = NOW(), user_id = %s
+            WHERE id = %s
+        ''', (user_id, new_address['id']))
+        
+        new_address['assigned_at'] = datetime.now()
+        return new_address
+    
+    except Error as e:
+        logger.error(f"Database error in assign_new_wallet_address: {str(e)}")
+        return None
+
+def ensure_wallet_address_pool(conn, cursor, mnemonic):
+    cursor.execute('SELECT COUNT(*) as count FROM wallet_addresses WHERE is_assigned = FALSE')
+    unassigned_count = cursor.fetchone()['count']
+    
+    if unassigned_count < MIN_POOL_SIZE:
+        addresses_to_generate = REPLENISH_SIZE - unassigned_count
+        new_addresses = generate_wallet_addresses(mnemonic, addresses_to_generate)
+        if insert_wallet_addresses(cursor, new_addresses):
+            conn.commit()
+            logger.info(f"Generated and inserted {len(new_addresses)} new wallet addresses")
+        else:
+            conn.rollback()
+            logger.error("Failed to insert new wallet addresses")
+
+def get_mnemonic(cursor):
+    cursor.execute('SELECT encrypted_mnemonic, encryption_key FROM mnemonics ORDER BY id DESC LIMIT 1')
+    mnemonic_record = cursor.fetchone()
+    if not mnemonic_record:
+        raise ValueError("No mnemonic found in the database")
+    return decrypt_mnemonic(mnemonic_record['encrypted_mnemonic'], mnemonic_record['encryption_key'])
+
 @bp.route('/walletaddress', methods=['POST'])
-# @token_required
-# @limiter.limit("5 per minute")
+@authenticate
+@limiter.limit("5 per minute")
 def assign_wallet_address():
-    """Assign a new wallet address based on the stored mnemonic."""
+    """Assign a new wallet address to a user or return all addresses for the user."""
+    user_id = request.json.get('user_id')
+    if not user_id:
+        return jsonify({"error": "User ID is required"}), 400
+
     conn = get_db_connection()
     if not conn:
         logger.error("Database connection failed")
@@ -86,115 +149,89 @@ def assign_wallet_address():
     try:
         cursor = conn.cursor(dictionary=True)
         
-        # Get the latest mnemonic
-        cursor.execute('SELECT encrypted_mnemonic, encryption_key FROM mnemonics ORDER BY id DESC LIMIT 1')
-        mnemonic_record = cursor.fetchone()
-        if not mnemonic_record:
-            logger.error("Mnemonic not found. Attempting to generate a new one.")
-            result = generate_and_store_mnemonic()
-            if isinstance(result, tuple) and result[1] != 200:
-                return result
+        # Get all existing wallet addresses for the user
+        existing_addresses = get_user_wallet_addresses(cursor, user_id)
+        
+        # Assign a new wallet address
+        new_address = assign_new_wallet_address(cursor, user_id)
+        
+        if not new_address:
+            # Check if we need to generate more addresses
+            mnemonic = get_mnemonic(cursor)
+            ensure_wallet_address_pool(conn, cursor, mnemonic)
+            # Try to assign a new address again
+            new_address = assign_new_wallet_address(cursor, user_id)
             
-            cursor.execute('SELECT encrypted_mnemonic, encryption_key FROM mnemonics ORDER BY id DESC LIMIT 1')
-            mnemonic_record = cursor.fetchone()
-            if not mnemonic_record:
-                logger.error("Failed to generate and retrieve new mnemonic")
-                return jsonify({"error": "Failed to generate and retrieve new mnemonic"}), 500
-
-        logger.info("Mnemonic record retrieved")
-        
-        try:
-            decrypted_mnemonic = decrypt_mnemonic(mnemonic_record['encrypted_mnemonic'], mnemonic_record['encryption_key'])
-        except Exception as e:
-            logger.error(f"Failed to decrypt mnemonic: {str(e)}")
-            return jsonify({"error": "Failed to decrypt mnemonic"}), 500
-
-        logger.info("Mnemonic decrypted successfully")
-        
-        try:
-            derivation_path = generate_unique_derivation_path(cursor)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 500
-
-        logger.info(f"Generated unique derivation path: {derivation_path}")
-        
-        # Get the wallet for this derivation path
-        try:
-            hdwallet = get_hdwallet(decrypted_mnemonic, derivation_path)
-            address = hdwallet.address()
-        except Exception as e:
-            logger.error(f"Failed to generate wallet address: {str(e)}")
-            return jsonify({"error": "Failed to generate wallet address"}), 500
-
-        logger.info(f"Wallet address generated: {address}")
-        
-        # Generate a unique name for the address
-        name = f"GiftCard-{secrets.token_hex(4)}"
-        
-        # Insert new address into database
-        if not insert_wallet_address(cursor, address, name, derivation_path):
-            conn.rollback()
-            return jsonify({"error": "Failed to insert new wallet address"}), 500
+            if not new_address:
+                logger.error("No available wallet addresses even after pool replenishment")
+                return jsonify({"error": "No available wallet addresses"}), 500
 
         conn.commit()
-
-        # Fetch the inserted record
-        cursor.execute('SELECT * FROM wallet_addresses WHERE address = %s', (address,))
-        wallet_info = cursor.fetchone()
         
-        logger.info(f"New wallet address assigned: {address}")
+        # Prepare the response
+        response = {
+            "user_id": user_id,
+            "new_address": {
+                "wallet_address_id": new_address['wallet_address_id'],
+                "address": new_address['address'],
+                "assigned_at": new_address['assigned_at'].isoformat()
+            },
+            "all_addresses": [
+                {
+                    "wallet_address_id": addr['wallet_address_id'],
+                    "address": addr['address'],
+                    "assigned_at": addr['assigned_at'].isoformat()
+                } for addr in existing_addresses
+            ] if existing_addresses else []
+        }
         
-        return jsonify({
-            "id": wallet_info['id'],
-            "address": wallet_info['address'],
-            "name": wallet_info['name'],
-            "created_at": wallet_info['created_at'].isoformat()
-        }), 200
+        # Add the new address to the list of all addresses
+        response["all_addresses"].insert(0, response["new_address"])
+        
+        return jsonify(response), 200
     except Error as e:
         conn.rollback()
         logger.error(f"Error assigning wallet address: {e}")
+        return jsonify({"error": "Database error occurred"}), 500
+    except ValueError as e:
+        logger.error(f"Value error: {str(e)}")
         return jsonify({"error": str(e)}), 500
     finally:
         if conn:
             conn.close()
 
-# @bp.route('/login', methods=['POST'])
-# def login():
-
-#     username = request.json.get('username', None)
-#     password = request.json.get('password', None)
-#     if username == 'admin' and password == 'password':
-#         token = jwt.encode({
-#             'user': username,
-#             'exp': datetime.utcnow() + timedelta(hours=24)
-#         }, JWT_SECRET_KEY)
-#         return jsonify({'token': token})
-    
-#     return jsonify({'message': 'Invalid credentials'}), 401
-
-# Add this function to generate and store a new mnemonic
-def generate_and_store_mnemonic():
-    mnemonic = generate_mnemonic(language="english", strength=128)
-    encryption_key = secrets.token_bytes(32)  # Generate a new encryption key
-    encrypted_mnemonic = encrypt_mnemonic(mnemonic, encryption_key)
-    
+def initialize_wallet_address_pool():
     conn = get_db_connection()
     if not conn:
         logger.error("Database connection failed")
-        return jsonify({"error": "Database connection failed"}), 500
+        return
 
     try:
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO mnemonics (encrypted_mnemonic, encryption_key)
-            VALUES (%s, %s)
-        ''', (encrypted_mnemonic, encryption_key))
-        conn.commit()
-        logger.info("New mnemonic generated and stored successfully")
-        return jsonify({"message": "New mnemonic generated and stored successfully"}), 200
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get or generate mnemonic
+        try:
+            mnemonic = get_mnemonic(cursor)
+        except ValueError:
+            mnemonic = generate_mnemonic(language="english", strength=128)
+            encryption_key = secrets.token_bytes(32)
+            encrypted_mnemonic = encrypt_mnemonic(mnemonic, encryption_key)
+            
+            cursor.execute('''
+                INSERT INTO mnemonics (encrypted_mnemonic, encryption_key)
+                VALUES (%s, %s)
+            ''', (encrypted_mnemonic, encryption_key))
+            conn.commit()
+        
+        ensure_wallet_address_pool(conn, cursor, mnemonic)
+        
+        logger.info("Wallet address pool initialized successfully")
     except Error as e:
         conn.rollback()
-        logger.error(f"Error storing new mnemonic: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error initializing wallet address pool: {e}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
+
+# Call this function when your application starts
+initialize_wallet_address_pool()

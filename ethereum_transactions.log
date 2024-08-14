@@ -1,0 +1,75 @@
+2024-08-13 12:14:49,445 - INFO - EthereumTransactionManager initialized for contract 0xdAC17F958D2ee523a2206206994597C13D831ec7
+2024-08-13 12:14:51,017 - ERROR - Error in estimate_gas: {'code': -32000, 'message': 'invalid opcode: INVALID'}
+Traceback (most recent call last):
+  File "/mnt/h/Gift cards/erc2.py", line 59, in estimate_gas
+    gas_estimate = self.contract.functions.transfer(to, amount).estimate_gas({'from': self.from_address})
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/contract/contract.py", line 341, in estimate_gas
+    return estimate_gas_for_function(
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/contract/utils.py", line 204, in estimate_gas_for_function
+    return w3.eth.estimate_gas(estimate_transaction, block_identifier, state_override)
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/eth/eth.py", line 316, in estimate_gas
+    return self._estimate_gas(transaction, block_identifier, state_override)
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/module.py", line 75, in caller
+    result = w3.manager.request_blocking(
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/manager.py", line 330, in request_blocking
+    return self.formatted_response(
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/manager.py", line 293, in formatted_response
+    raise ValueError(error)
+ValueError: {'code': -32000, 'message': 'invalid opcode: INVALID'}
+2024-08-13 12:14:51,028 - ERROR - Error in create_and_broadcast_transaction: Failed to estimate gas: {'code': -32000, 'message': 'invalid opcode: INVALID'}
+Traceback (most recent call last):
+  File "/mnt/h/Gift cards/erc2.py", line 59, in estimate_gas
+    gas_estimate = self.contract.functions.transfer(to, amount).estimate_gas({'from': self.from_address})
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/contract/contract.py", line 341, in estimate_gas
+    return estimate_gas_for_function(
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/contract/utils.py", line 204, in estimate_gas_for_function
+    return w3.eth.estimate_gas(estimate_transaction, block_identifier, state_override)
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/eth/eth.py", line 316, in estimate_gas
+    return self._estimate_gas(transaction, block_identifier, state_override)
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/module.py", line 75, in caller
+    result = w3.manager.request_blocking(
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/manager.py", line 330, in request_blocking
+    return self.formatted_response(
+  File "/home/alpha/.local/lib/python3.10/site-packages/web3/manager.py", line 293, in formatted_response
+    raise ValueError(error)
+ValueError: {'code': -32000, 'message': 'invalid opcode: INVALID'}
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/mnt/h/Gift cards/erc2.py", line 32, in create_and_broadcast_transaction
+    gas_limit = await self.estimate_gas(to_address, amount)
+  File "/mnt/h/Gift cards/erc2.py", line 64, in estimate_gas
+    raise TransactionError(f"Failed to estimate gas: {str(e)}")
+TransactionError: Failed to estimate gas: {'code': -32000, 'message': 'invalid opcode: INVALID'}
+2024-08-13 12:14:51,035 - ERROR - Transaction failed: Failed to create and broadcast transaction: Failed to estimate gas: {'code': -32000, 'message': 'invalid opcode: INVALID'}
+2024-08-13 12:21:37,708 - INFO - EthereumTransactionManager initialized for contract 0xdAC17F958D2ee523a2206206994597C13D831ec7
+2024-08-13 12:21:40,072 - INFO - Token balance: 0.0 USDT
+2024-08-13 12:21:40,073 - ERROR - Error in create_and_broadcast_transaction: Insufficient token balance. Available: 0, Required: 1000000000
+Traceback (most recent call last):
+  File "/mnt/h/Gift cards/erc.py", line 39, in create_and_broadcast_transaction
+    await self.check_balances(amount)
+  File "/mnt/h/Gift cards/erc.py", line 104, in check_balances
+    raise TransactionError(f"Insufficient token balance. Available: {token_balance}, Required: {amount}")
+TransactionError: Insufficient token balance. Available: 0, Required: 1000000000
+2024-08-13 12:21:40,084 - ERROR - Transaction failed: Failed to create and broadcast transaction: Insufficient token balance. Available: 0, Required: 1000000000
+2024-08-13 12:22:04,123 - INFO - EthereumTransactionManager initialized for contract 0xdAC17F958D2ee523a2206206994597C13D831ec7
+2024-08-13 12:22:05,839 - INFO - Token balance: 0.0 USDT
+2024-08-13 12:22:05,840 - ERROR - Error in create_and_broadcast_transaction: Insufficient token balance. Available: 0, Required: 1000000000
+Traceback (most recent call last):
+  File "/mnt/h/Gift cards/erc.py", line 39, in create_and_broadcast_transaction
+    await self.check_balances(amount)
+  File "/mnt/h/Gift cards/erc.py", line 104, in check_balances
+    raise TransactionError(f"Insufficient token balance. Available: {token_balance}, Required: {amount}")
+TransactionError: Insufficient token balance. Available: 0, Required: 1000000000
+2024-08-13 12:22:05,844 - ERROR - Transaction failed: Failed to create and broadcast transaction: Insufficient token balance. Available: 0, Required: 1000000000
+2024-08-13 12:47:21,007 - INFO - EthereumTransactionManager initialized for contract 0xdAC17F958D2ee523a2206206994597C13D831ec7
+2024-08-13 12:47:22,760 - INFO - Token balance: 0.0 USDT
+2024-08-13 12:47:22,761 - ERROR - Error in create_and_broadcast_transaction: Insufficient token balance. Available: 0, Required: 1000000000
+Traceback (most recent call last):
+  File "/mnt/h/Gift cards/erc.py", line 39, in create_and_broadcast_transaction
+    await self.check_balances(amount)
+  File "/mnt/h/Gift cards/erc.py", line 104, in check_balances
+    raise TransactionError(f"Insufficient token balance. Available: {token_balance}, Required: {amount}")
+TransactionError: Insufficient token balance. Available: 0, Required: 1000000000
+2024-08-13 12:47:22,766 - ERROR - Transaction failed: Failed to create and broadcast transaction: Insufficient token balance. Available: 0, Required: 1000000000
